@@ -7,12 +7,12 @@ import os
 from tensorboardX import SummaryWriter
 from torch.utils.data import DataLoader
 from imgaug import augmenters as iaa
-from torchvision import transforms
 import torch.nn as nn
 import torch
 
 import loss_functions
 import dataloader
+from model import SurfaceNormalModel
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-c', '--configFile', required=True, help='Path to config yaml file', metavar='path/to/config')
@@ -175,7 +175,7 @@ def train(model, train_dataloader, criterion, optimizer, total_iter_num):
     return total_iter_num
 
 
-def evaluate(model, val_dataloader, criterion, optimizer, total_iter_num):
+def evaluate(model, val_dataloader, criterion, total_iter_num):
     model.eval()
     running_loss = 0.0
     running_mean = 0
@@ -210,7 +210,7 @@ def evaluate(model, val_dataloader, criterion, optimizer, total_iter_num):
     writer.add_scalar('data/Val Epoch Median Error (deg)', epoch_median, total_iter_num)
 
 
-model = Model()
+model = SurfaceNormalModel(num_classes=config.train.numClasses, backbone='resnet', freeze_bn=False)
 #model = nn.DataParallel(model)
 model = model.to(device)
 
@@ -228,6 +228,6 @@ for epoch in range(epochs):
     print('\n\nEpoch {}/{}'.format(epoch, epochs - 1))
     writer.add_scalar('data/Epoch Number', epoch, total_iter_num)
     total_iter_num = train(model, train_dataloader, criterion, optimizer, total_iter_num)
-    evaluate(model, val_dataloader, criterion, optimizer, total_iter_num)
+    evaluate(model, val_dataloader, criterion, total_iter_num)
 
 
