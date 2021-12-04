@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 import h5py
 import pickle
+import os
 
 
 class SurfaceNormalsDataset(Dataset):
@@ -43,23 +44,25 @@ class SurfaceNormalsDataset(Dataset):
         # Create list of filenames
         self.images_list = []
         self.labels_list = []
+        self.datalist_input = []
+        self.labels_input = []
         self.read_data()
 
 
     def __len__(self):
-        return len(self.images_list)
+        return min(len(self.datalist_input), len(self.labels_input))
 
     def read_data(self):
-        with open(self.images_pickle) as file:
-            datalist_input = pickle.load(file)
-        with open(self.labels_pickle) as file1:
-            labels_input = pickle.load(file1)
-        for image in datalist_input:
-            hdf = h5py.File(image, 'r')
-            self.images_list.append(hdf['dataset'][:])
-        for label in labels_input:
-            hdf1 = h5py.File(label, 'r')
-            self.labels_list.append(hdf1['dataset'][:])
+        with open(self.images_pickle, 'rb') as file:
+            temp = pickle.load(file)
+        for i in temp:
+            if os.path.exists('../hdf5s-r/' + i):
+                self.datalist_input.append(i)
+        with open(self.labels_pickle, 'rb') as file1:
+            temp = pickle.load(file1)
+        for i in temp:
+            if os.path.exists('../normals-r/' + i):
+                self.labels_input.append(i)
 
     def __getitem__(self, index):
         '''Returns an item from the dataset at the given index. If no labels directory has been specified,
@@ -72,21 +75,28 @@ class SurfaceNormalsDataset(Dataset):
         '''
 
         # Open input imgs
-        _img = self.images_list[index]
-        _label = self.labels_list[index]
+        _img_path = self.datalist_input[index]
+        _label_path = self.labels_input[index]
+
+        hdf_image = h5py.File('../hdf5s-r/' + _img_path, 'r')
+        hdf_label = h5py.File('../normals-r/' + _label_path, 'r')
+
+        _img = hdf_image['dataset'][:].astype('uint8')
+        _label = hdf_label['dataset'][:].astype('uint8')
 
         # Apply image augmentations and convert to Tensor
         if self.transform:
             det_tf = self.transform.to_deterministic()
 
             _img = det_tf.augment_image(_img)
+            #_img = _img.transpose((2, 0, 1))
 
             # Making all values of invalid pixels marked as -1.0 to 0.
             # In raw data, invalid pixels are marked as (-1, -1, -1) so that on conversion to RGB they appear black.
             mask = np.all(_label == -1.0, axis=0)
             _label[:, mask] = 0.0
 
-            _label = _label.transpose((1, 2, 0))  # To Shape: (H, W, 3)
+            #_label = _label.transpose((1, 2, 0))  # To Shape: (H, W, 3)
             _label = det_tf.augment_image(_label, hooks=ia.HooksImages(activator=self._activator_masks))
             _label = _label.transpose((2, 0, 1))  # To Shape: (3, H, W)
 
@@ -94,11 +104,11 @@ class SurfaceNormalsDataset(Dataset):
         _img_tensor = transforms.ToTensor()(_img)
 
         _label_tensor = torch.from_numpy(_label)
-        _label_tensor = nn.functional.normalize(_label_tensor, p=2, dim=0)
+        # _label_tensor = nn.functional.normalize(_label_tensor, p=2, dim=0)
 
-        return _img_tensor, _label_tensor,
+        return _img_tensor, _label_tensor
 
-    def _activator_masks(self, augmenter, default):
+    def _activator_masks(self, images, augmenter, parents, default):
         '''Used with imgaug to help only apply some augmentations to images and not labels
         Eg: Blur is applied to input only, not label. However, resize is applied to both.
         '''
@@ -131,14 +141,14 @@ class SurfaceNormalsDataset(Dataset):
     #     iaa.Scale((imsize, imsize), 0),
     # ])
 
-augs = None  # augs_train
+'''augs = None  # augs_train
 input_only = None  # ["gaus-blur", "grayscale", "gaus-noise", "brightness", "contrast", "hue-sat", "color-jitter"]
 
-db_test = SurfaceNormalsDataset(input_dir="./hdf5.pickle",
-                                label_dir="./normal.pickle",
+db_test = SurfaceNormalsDataset(input_dir="C:/Users/Classified/Documents/Surface Normals/Surface-Normal-Prediction/hdf5.pickle",
+                                label_dir="C:/Users/Classified/Documents/Surface Normals/Surface-Normal-Prediction/normal.pickle",
                                 transform=augs,
                                 input_only=input_only)
 
 batch_size = 16
-testloader = DataLoader(db_test, batch_size=batch_size, shuffle=True, num_workers=32, drop_last=True)
+testloader = DataLoader(db_test, batch_size=batch_size, shuffle=True, num_workers=32, drop_last=True)'''
 

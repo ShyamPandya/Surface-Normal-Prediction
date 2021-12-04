@@ -11,10 +11,10 @@ import torch.nn as nn
 import torch
 
 import loss_functions
-import dataloader
+from dataloader import SurfaceNormalsDataset
 from model import SurfaceNormalModel
 
-parser = argparse.ArgumentParser()
+'''parser = argparse.ArgumentParser()
 parser.add_argument('-c', '--configFile', required=True, help='Path to config yaml file', metavar='path/to/config')
 args = parser.parse_args()
 
@@ -23,11 +23,11 @@ CONFIG_FILE_PATH = args.configFile
 with open(CONFIG_FILE_PATH) as fd:
     config_yaml = oyaml.load(fd)
 
-config = AttrDict(config_yaml)
+config = AttrDict(config_yaml)'''
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-log_dir = "./runs/" + args.title
+log_dir = "./runs/"
 writer = SummaryWriter(log_dir, comment='create-graph')
 checkpoint_dir = log_dir + "/checkpoints"
 if not os.path.exists(checkpoint_dir):
@@ -41,8 +41,8 @@ input_only = [
 augs_train = iaa.Sequential([
     # Geometric Augs
     iaa.Resize({
-        "height": config.train.imgHeight,
-        "width": config.train.imgWidth
+        "height": 256,
+        "width": 256
     }, interpolation='nearest'),
     # iaa.Fliplr(0.5),
     # iaa.Flipud(0.5),
@@ -97,32 +97,32 @@ augs_train = iaa.Sequential([
 
 augs_test = iaa.Sequential([
     iaa.Resize({
-        "height": config.train.imgHeight,
-        "width": config.train.imgWidth
+        "height": 256,
+        "width": 256
     }, interpolation='nearest'),
 ])
 
 def get_data_loaders():
-    train_dataset = dataloader.SurfaceNormalsDataset(input_dir=config.train.images,
-                                                         label_dir=config.train.labels,
+    train_dataset = SurfaceNormalsDataset(input_dir="hdf5.pickle",
+                                                         label_dir ="normal.pickle",
                                                          transform=augs_train,
                                                          input_only=input_only)
 
-    val_dataset = dataloader.SurfaceNormalsDataset(input_dir=config.val.images,
-                                                     label_dir=config.val.labels,
+    val_dataset = SurfaceNormalsDataset(input_dir='hdf5.pickle',
+                                                     label_dir='normal.pickle',
                                                      transform=augs_test,
                                                      input_only=None)
 
     train_dataloader = DataLoader(train_dataset,
-                                   batch_size=config.train.batchSize,
+                                   batch_size=8,
                                    shuffle=True,
-                                   num_workers=config.train.numWorkers,
+                                   num_workers=1,
                                    drop_last=True,
                                    pin_memory=True)
     val_dataloader = DataLoader(val_dataset,
-                                   batch_size=config.val.validationBatchSize,
+                                   batch_size=8,
                                    shuffle=True,
-                                   num_workers=config.val.numWorkers,
+                                   num_workers=1,
                                    drop_last=False)
     return train_dataloader, val_dataloader
 
@@ -132,9 +132,9 @@ def train(model, train_dataloader, criterion, optimizer, total_iter_num):
     running_loss = 0.0
     running_mean = 0
     running_median = 0
-    for iter_num, batch in enumerate(tqdm(train_dataloader)):
+    for iter_num, batch in enumerate(train_dataloader):
         total_iter_num += 1
-        inputs, labels, masks = batch
+        inputs, labels = batch
         inputs = inputs.to(device)
         labels = labels.to(device)
         optimizer.zero_grad()
@@ -147,18 +147,20 @@ def train(model, train_dataloader, criterion, optimizer, total_iter_num):
         loss.backward()
         optimizer.step()
 
+        print(str(iter_num) + " " + str(loss.item()))
+
         normal_vectors_norm = normal_vectors_norm.detach().cpu()
         inputs = inputs.detach().cpu()
         labels = labels.detach().cpu()
-        mask_tensor = masks.squeeze(1)
 
         loss_deg_mean, loss_deg_median, percentage_1, percentage_2, percentage_3 = loss_functions.metric_calculator_batch(
-            normal_vectors_norm, labels.double(), mask_tensor)
+            normal_vectors_norm, labels.double())
         running_mean += loss_deg_mean.item()
         running_median += loss_deg_median.item()
 
         # statistics
         running_loss += loss.item()
+
         writer.add_scalar('data/Train BatchWise Loss', loss.item(), total_iter_num)
         writer.add_scalar('data/Train Mean Error (deg)', loss_deg_mean.item(), total_iter_num)
         writer.add_scalar('data/Train Median Error (deg)', loss_deg_median.item(), total_iter_num)
@@ -181,7 +183,7 @@ def evaluate(model, val_dataloader, criterion, total_iter_num):
     running_mean = 0
     running_median = 0
     for iter_num, sample_batched in enumerate(tqdm(val_dataloader)):
-        inputs, labels, masks = sample_batched
+        inputs, labels = sample_batched
         inputs = inputs.to(device)
         labels = labels.to(device)
 
@@ -209,25 +211,25 @@ def evaluate(model, val_dataloader, criterion, total_iter_num):
     writer.add_scalar('data/Val Epoch Mean Error (deg)', epoch_mean, total_iter_num)
     writer.add_scalar('data/Val Epoch Median Error (deg)', epoch_median, total_iter_num)
 
+if __name__ == '__main__':
+    model = SurfaceNormalModel(num_classes=3, backbone='resnet', freeze_bn=False)
+    #model = nn.DataParallel(model)
+    model = model.to(device)
 
-model = SurfaceNormalModel(num_classes=config.train.numClasses, backbone='resnet', freeze_bn=False)
-#model = nn.DataParallel(model)
-model = model.to(device)
+    optimizer = torch.optim.Adam(model.parameters(),
+                                 lr=float(0.0001),
+                                 weight_decay=float(0))
 
-optimizer = torch.optim.Adam(model.parameters(),
-                             lr=float(config.train.optimAdam.learningRate),
-                             weight_decay=float(config.train.optimAdam.weightDecay))
+    criterion = loss_functions.loss_fn_cosine
 
-criterion = loss_functions.loss_fn_cosine
+    train_dataloader, val_dataloader = get_data_loaders()
 
-train_dataloader, val_dataloader = get_data_loaders()
-
-total_iter_num = 0
-epochs = config.train.numEpochs
-for epoch in range(epochs):
-    print('\n\nEpoch {}/{}'.format(epoch, epochs - 1))
-    writer.add_scalar('data/Epoch Number', epoch, total_iter_num)
-    total_iter_num = train(model, train_dataloader, criterion, optimizer, total_iter_num)
-    evaluate(model, val_dataloader, criterion, total_iter_num)
+    total_iter_num = 0
+    epochs = 500
+    for epoch in range(epochs):
+        print('\n\nEpoch {}/{}'.format(epoch, epochs - 1))
+        writer.add_scalar('data/Epoch Number', epoch, total_iter_num)
+        total_iter_num = train(model, train_dataloader, criterion, optimizer, total_iter_num)
+        evaluate(model, val_dataloader, criterion, total_iter_num)
 
 
