@@ -144,39 +144,3 @@ class SurfaceNormalsDataset(Dataset):
             return False
         else:
             return default
-
-
-    # Example Augmentations using imgaug
-    # imsize = 512
-    # augs_train = iaa.Sequential([
-    #     # Geometric Augs
-    #     iaa.Scale((imsize, imsize), 0), # Resize image
-    #     iaa.Fliplr(0.5),
-    #     iaa.Flipud(0.5),
-    #     iaa.Rot90((0, 4)),
-    #     # Blur and Noise
-    #     #iaa.Sometimes(0.2, iaa.GaussianBlur(sigma=(0, 1.5), name="gaus-blur")),
-    #     #iaa.Sometimes(0.1, iaa.Grayscale(alpha=(0.0, 1.0), from_colorspace="RGB", name="grayscale")),
-    #     iaa.Sometimes(0.2, iaa.AdditiveLaplaceNoise(scale=(0, 0.1*255), per_channel=True, name="gaus-noise")),
-    #     # Color, Contrast, etc.
-    #     #iaa.Sometimes(0.2, iaa.Multiply((0.75, 1.25), per_channel=0.1, name="brightness")),
-    #     iaa.Sometimes(0.2, iaa.GammaContrast((0.7, 1.3), per_channel=0.1, name="contrast")),
-    #     iaa.Sometimes(0.2, iaa.AddToHueAndSaturation((-20, 20), name="hue-sat")),
-    #     #iaa.Sometimes(0.3, iaa.Add((-20, 20), per_channel=0.5, name="color-jitter")),
-    # ])
-    # augs_test = iaa.Sequential([
-    #     # Geometric Augs
-    #     iaa.Scale((imsize, imsize), 0),
-    # ])
-
-'''augs = None  # augs_train
-input_only = None  # ["gaus-blur", "grayscale", "gaus-noise", "brightness", "contrast", "hue-sat", "color-jitter"]
-
-db_test = SurfaceNormalsDataset(input_dir="C:/Users/Classified/Documents/Surface Normals/Surface-Normal-Prediction/hdf5.pickle",
-                                label_dir="C:/Users/Classified/Documents/Surface Normals/Surface-Normal-Prediction/normal.pickle",
-                                transform=augs,
-                                input_only=input_only)
-
-batch_size = 16
-testloader = DataLoader(db_test, batch_size=batch_size, shuffle=True, num_workers=32, drop_last=True)'''
-
