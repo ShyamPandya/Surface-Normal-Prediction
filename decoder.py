@@ -2,6 +2,7 @@ import torch.nn.functional as F
 import torch.nn as nn
 import torch
 
+
 class Decoder(nn.Module):
     def __init__(self, num_classes, backbone, BatchNorm):
         super(Decoder, self).__init__()
@@ -27,7 +28,6 @@ class Decoder(nn.Module):
                                        # nn.Dropout(0.1),
                                        nn.Conv2d(256, num_classes, kernel_size=1, stride=1))
         self._init_weight()
-
 
     def forward(self, x, low_level_feat):
         low_level_feat = self.conv1(low_level_feat)

@@ -10,6 +10,7 @@ from torchvision import transforms
 import h5py
 import pickle
 import os
+import random
 
 
 class SurfaceNormalsDataset(Dataset):
@@ -32,6 +33,7 @@ class SurfaceNormalsDataset(Dataset):
             label_dir,
             transform=None,
             input_only=None,
+            is_train=True
     ):
 
         super().__init__()
@@ -40,6 +42,7 @@ class SurfaceNormalsDataset(Dataset):
         self.labels_pickle = label_dir
         self.transform = transform
         self.input_only = input_only
+        self.is_train = is_train
 
         # Create list of filenames
         self.images_list = []
@@ -50,19 +53,42 @@ class SurfaceNormalsDataset(Dataset):
 
 
     def __len__(self):
-        return min(len(self.datalist_input), len(self.labels_input))
+        return len(self.datalist_input)
 
     def read_data(self):
+        limit = 40000 if self.is_train else 5000
+        #limit = 500 if self.is_train else 100
+
         with open(self.images_pickle, 'rb') as file:
-            temp = pickle.load(file)
-        for i in temp:
-            if os.path.exists('../hdf5s-r/' + i):
-                self.datalist_input.append(i)
-        with open(self.labels_pickle, 'rb') as file1:
-            temp = pickle.load(file1)
-        for i in temp:
-            if os.path.exists('../normals-r/' + i):
-                self.labels_input.append(i)
+            image_list = pickle.load(file)
+            file.close()
+
+        with open(self.labels_pickle, 'rb') as file:
+            label_list = pickle.load(file)
+            file.close()
+
+        temp = list(zip(image_list, label_list))
+        random.seed(69)
+        random.shuffle(temp)
+        image_list, label_list = zip(*temp)
+
+        if self.is_train:
+            image_list = image_list[:40000]
+            label_list = label_list[:40000]
+        else:
+            image_list = image_list[-8000:]
+            label_list = label_list[-8000:]
+
+        counter = 0
+        for i in range(len(image_list)):
+            if counter == limit:
+                break
+            image_name = image_list[i]
+            label_name = label_list[i]
+            self.datalist_input.append(image_name)
+            self.labels_input.append(label_name)
+            counter += 1
+
 
     def __getitem__(self, index):
         '''Returns an item from the dataset at the given index. If no labels directory has been specified,
@@ -78,18 +104,19 @@ class SurfaceNormalsDataset(Dataset):
         _img_path = self.datalist_input[index]
         _label_path = self.labels_input[index]
 
-        hdf_image = h5py.File('../hdf5s-r/' + _img_path, 'r')
-        hdf_label = h5py.File('../normals-r/' + _label_path, 'r')
+        hdf_image = h5py.File('../chupao/jpegs/' + _img_path, 'r')
+        hdf_label = h5py.File('../chupao/normals-r/' + _label_path, 'r')
 
-        _img = hdf_image['dataset'][:].astype('uint8')
-        _label = hdf_label['dataset'][:].astype('uint8')
+        _img = hdf_image['dataset'][:].astype('float32')
+        _label = hdf_label['dataset'][:].astype('float32')
+
+        #print(_img)
 
         # Apply image augmentations and convert to Tensor
         if self.transform:
             det_tf = self.transform.to_deterministic()
 
             _img = det_tf.augment_image(_img)
-            #_img = _img.transpose((2, 0, 1))
 
             # Making all values of invalid pixels marked as -1.0 to 0.
             # In raw data, invalid pixels are marked as (-1, -1, -1) so that on conversion to RGB they appear black.
@@ -98,7 +125,8 @@ class SurfaceNormalsDataset(Dataset):
 
             #_label = _label.transpose((1, 2, 0))  # To Shape: (H, W, 3)
             _label = det_tf.augment_image(_label, hooks=ia.HooksImages(activator=self._activator_masks))
-            _label = _label.transpose((2, 0, 1))  # To Shape: (3, H, W)
+
+        _label = _label.transpose((2, 0, 1))  # To Shape: (3, H, W)
 
         # Return Tensors
         _img_tensor = transforms.ToTensor()(_img)

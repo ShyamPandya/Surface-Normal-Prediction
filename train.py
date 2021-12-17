@@ -1,7 +1,3 @@
-from attrdict import AttrDict
-import argparse
-import oyaml
-import tqdm
 import os
 
 from tensorboardX import SummaryWriter
@@ -13,23 +9,13 @@ import torch
 import loss_functions
 from dataloader import SurfaceNormalsDataset
 from model import SurfaceNormalModel
+from utils import create_grid_image
 
-'''parser = argparse.ArgumentParser()
-parser.add_argument('-c', '--configFile', required=True, help='Path to config yaml file', metavar='path/to/config')
-args = parser.parse_args()
-
-CONFIG_FILE_PATH = args.configFile
-
-with open(CONFIG_FILE_PATH) as fd:
-    config_yaml = oyaml.load(fd)
-
-config = AttrDict(config_yaml)'''
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 log_dir = "./runs/"
 writer = SummaryWriter(log_dir, comment='create-graph')
-checkpoint_dir = log_dir + "/checkpoints"
+'''checkpoint_dir = log_dir + "/checkpoints"
 if not os.path.exists(checkpoint_dir):
     os.mkdir(checkpoint_dir)
 
@@ -40,10 +26,10 @@ input_only = [
 
 augs_train = iaa.Sequential([
     # Geometric Augs
-    iaa.Resize({
-        "height": 256,
-        "width": 256
-    }, interpolation='nearest'),
+    # iaa.Resize({
+    #    "height": 256,
+    #    "width": 256
+    # }, interpolation='nearest'),
     # iaa.Fliplr(0.5),
     # iaa.Flipud(0.5),
     # iaa.Rot90((0, 4)),
@@ -101,33 +87,36 @@ augs_test = iaa.Sequential([
         "width": 256
     }, interpolation='nearest'),
 ])
+'''
+
 
 def get_data_loaders():
-    train_dataset = SurfaceNormalsDataset(input_dir="hdf5.pickle",
-                                                         label_dir ="normal.pickle",
-                                                         transform=augs_train,
-                                                         input_only=input_only)
+    train_dataset = SurfaceNormalsDataset(input_dir="../chupao/jpeg2.pickle",
+                                          label_dir="../chupao/normal2.pickle",
+                                          transform=None,
+                                          input_only=None)
 
-    val_dataset = SurfaceNormalsDataset(input_dir='hdf5.pickle',
-                                                     label_dir='normal.pickle',
-                                                     transform=augs_test,
-                                                     input_only=None)
+    val_dataset = SurfaceNormalsDataset(input_dir='../chupao/jpeg2.pickle',
+                                        label_dir='../chupao/normal2.pickle',
+                                        transform=None,
+                                        input_only=None,
+                                        is_train=False)
 
     train_dataloader = DataLoader(train_dataset,
-                                   batch_size=8,
-                                   shuffle=True,
-                                   num_workers=1,
-                                   drop_last=True,
-                                   pin_memory=True)
+                                  batch_size=64,
+                                  shuffle=True,
+                                  num_workers=1,
+                                  drop_last=True,
+                                  pin_memory=True)
     val_dataloader = DataLoader(val_dataset,
-                                   batch_size=8,
-                                   shuffle=True,
-                                   num_workers=1,
-                                   drop_last=False)
+                                batch_size=64,
+                                shuffle=True,
+                                num_workers=1,
+                                drop_last=False)
     return train_dataloader, val_dataloader
 
 
-def train(model, train_dataloader, criterion, optimizer, total_iter_num):
+def train(model, train_dataloader, criterion, optimizer, total_iter_num, epoch):
     model.train()
     running_loss = 0.0
     running_mean = 0
@@ -142,16 +131,17 @@ def train(model, train_dataloader, criterion, optimizer, total_iter_num):
         normal_vectors = model(inputs)
         normal_vectors_norm = nn.functional.normalize(normal_vectors.double(), p=2, dim=1)
 
-        loss = criterion(normal_vectors_norm, labels, reduction='sum')
+        loss = criterion(normal_vectors_norm, labels.double(), reduction='sum')
+        loss /= 64  # Dividing by batch size for drn
+
+        # loss = criterion(normal_vectors, labels)
 
         loss.backward()
         optimizer.step()
 
-        print(str(iter_num) + " " + str(loss.item()))
-
-        normal_vectors_norm = normal_vectors_norm.detach().cpu()
-        inputs = inputs.detach().cpu()
-        labels = labels.detach().cpu()
+        # normal_vectors_norm = normal_vectors_norm.detach().cpu()
+        # normal_vectors = normal_vectors.detach().cpu()
+        # labels = labels.detach().cpu()
 
         loss_deg_mean, loss_deg_median, percentage_1, percentage_2, percentage_3 = loss_functions.metric_calculator_batch(
             normal_vectors_norm, labels.double())
@@ -174,15 +164,24 @@ def train(model, train_dataloader, criterion, optimizer, total_iter_num):
     epoch_median = running_median / num_samples
     print('Train Epoch Mean Error (deg): {:.4f}'.format(epoch_mean))
     print('Train Epoch Median Error (deg): {:.4f}'.format(epoch_median))
+
+    if epoch % 100 == 0:
+        grid_image = create_grid_image(inputs.detach().cpu(),
+                                       normal_vectors_norm.detach().cpu(),
+                                       labels.detach().cpu(),
+                                       max_num_images_to_save=5)
+        writer.add_image('img/training predictions', grid_image, epoch)
+
     return total_iter_num
 
 
-def evaluate(model, val_dataloader, criterion, total_iter_num):
+def evaluate(model, val_dataloader, criterion, total_iter_num, epoch):
     model.eval()
     running_loss = 0.0
     running_mean = 0
     running_median = 0
-    for iter_num, sample_batched in enumerate(tqdm(val_dataloader)):
+    best_loss_deg_mean = 500
+    for iter_num, sample_batched in enumerate(val_dataloader):
         inputs, labels = sample_batched
         inputs = inputs.to(device)
         labels = labels.to(device)
@@ -193,10 +192,18 @@ def evaluate(model, val_dataloader, criterion, total_iter_num):
         normal_vectors_norm = nn.functional.normalize(normal_vectors.double(), p=2, dim=1)
         loss = criterion(normal_vectors_norm, labels.double(), reduction='sum')
 
+        loss /= 64  # Dividing by batch size for drn
+        # loss = criterion(normal_vectors, labels)
+
         running_loss += loss.item()
 
         loss_deg_mean, loss_deg_median, percentage_1, percentage_2, percentage_3 = loss_functions.metric_calculator_batch(
             normal_vectors_norm, labels.double())
+
+        if loss_deg_mean.item() < best_loss_deg_mean:
+            best_loss_deg_mean = loss_deg_mean.item()
+            torch.save(model.state_dict(), 'trained_model_drn_224_size.pth')
+
         running_mean += loss_deg_mean.item()
         running_median += loss_deg_median.item()
 
@@ -211,25 +218,70 @@ def evaluate(model, val_dataloader, criterion, total_iter_num):
     writer.add_scalar('data/Val Epoch Mean Error (deg)', epoch_mean, total_iter_num)
     writer.add_scalar('data/Val Epoch Median Error (deg)', epoch_median, total_iter_num)
 
+    if epoch % 100 == 0:
+        grid_image = create_grid_image(inputs.detach().cpu(),
+                                       normal_vectors_norm.detach().cpu(),
+                                       labels.detach().cpu(),
+                                       max_num_images_to_save=5)
+        writer.add_image('img/validation predictions', grid_image, epoch)
+
+
+def test(model):
+    model.load_state_dict(torch.load('trained_model_drn.pth'))
+    model = model.to(device)
+    train_dataloader, val_dataloader = get_data_loaders()
+    i = 0
+
+    for iter_num, sample_batched in enumerate(val_dataloader):
+        if i == 10:
+            break
+        inputs, labels = sample_batched
+        inputs = inputs.to(device)
+        labels = labels.to(device)
+
+        with torch.no_grad():
+            normal_vectors = model(inputs)
+
+        normal_vectors_norm = nn.functional.normalize(normal_vectors.double(), p=2, dim=1)
+
+        grid_image = create_grid_image(inputs.detach().cpu(),
+                                       normal_vectors_norm.detach().cpu().float(),
+                                       labels.detach().cpu(),
+                                       max_num_images_to_save=5)
+        writer.add_image('img/validation predictions', grid_image, i)
+        i += 1
+
+
 if __name__ == '__main__':
-    model = SurfaceNormalModel(num_classes=3, backbone='resnet', freeze_bn=False)
-    #model = nn.DataParallel(model)
+    model = SurfaceNormalModel(num_classes=3, backbone='drn', freeze_bn=False)
+    test(model)
+
+    '''model = SurfaceNormalModel(num_classes=3, backbone='drn', freeze_bn=False)
     model = model.to(device)
 
     optimizer = torch.optim.Adam(model.parameters(),
-                                 lr=float(0.0001),
+                                 lr=float(0.001),
                                  weight_decay=float(0))
 
+    optimizer = torch.optim.SGD(model.parameters(),
+                                lr=float(1e-6),
+                                momentum=float(0.9),
+                                weight_decay=float(5e-4))
+
+    lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer,
+                                                   step_size=7,
+                                                   gamma=float(0.1))
+
     criterion = loss_functions.loss_fn_cosine
+    # criterion = nn.MSELoss()
 
     train_dataloader, val_dataloader = get_data_loaders()
 
     total_iter_num = 0
-    epochs = 500
+    epochs = 1000
     for epoch in range(epochs):
         print('\n\nEpoch {}/{}'.format(epoch, epochs - 1))
         writer.add_scalar('data/Epoch Number', epoch, total_iter_num)
-        total_iter_num = train(model, train_dataloader, criterion, optimizer, total_iter_num)
-        evaluate(model, val_dataloader, criterion, total_iter_num)
-
-
+        lr_scheduler.step()
+        total_iter_num = train(model, train_dataloader, criterion, optimizer, total_iter_num, epoch)
+        evaluate(model, val_dataloader, criterion, total_iter_num, epoch)'''

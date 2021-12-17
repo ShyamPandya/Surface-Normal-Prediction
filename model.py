@@ -5,6 +5,7 @@ from backbone import build_backbone
 from decoder import build_decoder
 from aspp import build_aspp
 
+
 class SurfaceNormalModel(nn.Module):
     def __init__(self, backbone='resnet', output_stride=16, num_classes=21, freeze_bn=False):
         super(SurfaceNormalModel, self).__init__()
@@ -20,7 +21,6 @@ class SurfaceNormalModel(nn.Module):
         if freeze_bn:
             self.freeze_bn()
 
-
     def forward(self, input):
         x, low_level_feat = self.backbone(input)
         x = self.aspp(x)
@@ -28,7 +28,6 @@ class SurfaceNormalModel(nn.Module):
         x = F.interpolate(x, size=input.size()[2:], mode='bilinear', align_corners=True)
 
         return x
-
 
     def freeze_bn(self):
         for m in self.modules():
